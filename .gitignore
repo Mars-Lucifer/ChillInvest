@@ -1,15 +1,33 @@
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
 .DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+
+# Local machine config
 local.properties
+*.jks
+*.keystore
+*.pem
+*.p12
+
+# IDE
+.idea/
+
+# Gradle and Android build caches
+.gradle/
+.gradle-user/
+.android-user/
+.kotlin/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+gradle/gradle-daemon-jvm.properties
+
+# Logs, reports, and crash dumps
+*.log
+*.out
+*.err
+*.stacktrace
+hs_err_pid*
+replay_pid*
+*.hprof
