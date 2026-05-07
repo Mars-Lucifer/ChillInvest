@@ -1,10 +1,12 @@
 package components.page
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -23,6 +25,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,11 +36,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -46,10 +52,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -57,11 +64,13 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -72,6 +81,7 @@ import androidx.security.crypto.MasterKey
 import com.example.chillinvest.R
 import com.example.chillinvest.ui.theme.AppBackground
 import com.example.chillinvest.ui.theme.AppBorder
+import com.example.chillinvest.ui.theme.AppDarkAccent
 import com.example.chillinvest.ui.theme.AppMutedText
 import com.example.chillinvest.ui.theme.AppOverlay
 import com.example.chillinvest.ui.theme.AppPrimary
@@ -80,23 +90,76 @@ import com.example.chillinvest.ui.theme.AppSurface
 import com.example.chillinvest.ui.theme.ChillInvestTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.ResolverStyle
+
+private const val SecurePrefsName = "chill_invest_secure"
+private const val KeyServer = "server"
+private const val KeyLogin = "login"
+private const val KeyPassword = "password"
+private const val KeyLocalPin = "local_pin"
+private const val KeyBiometryEnabled = "biometry_enabled"
+private const val KeyDeadlineDate = "deadline_date"
+private const val KeyDeadlineInfinite = "deadline_infinite"
+private const val KeyGoalAmount = "goal_amount"
+private const val KeyGoalSyncEnabled = "goal_sync_enabled"
+private const val KeyStrategyMode = "strategy_mode"
+private const val KeyProfitPercent = "profit_percent"
+private const val KeyOnboardingCompleted = "onboarding_completed"
+private val DeadlineDateFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("dd.MM.uuuu").withResolverStyle(ResolverStyle.STRICT)
 
 private enum class HelloScreen {
     Welcome,
     CreatePin,
     ConfirmPin,
+    FinalSetup,
     Done
 }
+
+private enum class StrategyMode(val title: String) {
+    Fixed("Фикс"),
+    Adaptive("Адаптив")
+}
+
+private data class StoredHelloState(
+    val server: String = "",
+    val login: String = "",
+    val password: String = "",
+    val deadlineDate: String = "",
+    val deadlineInfinite: Boolean = true,
+    val goalAmount: String = "",
+    val goalSyncEnabled: Boolean = false,
+    val strategyMode: StrategyMode = StrategyMode.Adaptive,
+    val profitPercent: String = "",
+    val onboardingCompleted: Boolean = false
+)
 
 @Composable
 fun HelloFlow(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var screen by rememberSaveable { mutableStateOf(HelloScreen.Welcome) }
-    var server by rememberSaveable { mutableStateOf("") }
-    var login by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    val storedState = remember(context) { loadStoredHelloState(context) }
+    var screen by rememberSaveable {
+        mutableStateOf(
+            if (storedState.onboardingCompleted) {
+                HelloScreen.Done
+            } else {
+                HelloScreen.Welcome
+            }
+        )
+    }
+    var server by rememberSaveable { mutableStateOf(storedState.server) }
+    var login by rememberSaveable { mutableStateOf(storedState.login) }
+    var password by rememberSaveable { mutableStateOf(storedState.password) }
     var pin by rememberSaveable { mutableStateOf("") }
     var confirmPin by rememberSaveable { mutableStateOf("") }
+    var deadlineDate by rememberSaveable { mutableStateOf(storedState.deadlineDate) }
+    var deadlineInfinite by rememberSaveable { mutableStateOf(storedState.deadlineInfinite) }
+    var goalAmount by rememberSaveable { mutableStateOf(storedState.goalAmount) }
+    var goalSyncEnabled by rememberSaveable { mutableStateOf(storedState.goalSyncEnabled) }
+    var strategyMode by rememberSaveable { mutableStateOf(storedState.strategyMode) }
+    var profitPercent by rememberSaveable { mutableStateOf(storedState.profitPercent) }
     var showBiometryPopup by rememberSaveable { mutableStateOf(false) }
     var isBiometryLoading by rememberSaveable { mutableStateOf(false) }
 
@@ -143,6 +206,12 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                         server = nextServer
                         login = nextLogin
                         password = nextPassword
+                        saveWelcomeSettings(
+                            context = context,
+                            server = nextServer,
+                            login = nextLogin,
+                            password = nextPassword
+                        )
                         screen = HelloScreen.CreatePin
                     }
                 )
@@ -188,6 +257,34 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                     }
                 )
 
+                HelloScreen.FinalSetup -> FinalSetupScreen(
+                    deadlineDate = deadlineDate,
+                    deadlineInfinite = deadlineInfinite,
+                    goalAmount = goalAmount,
+                    goalSyncEnabled = goalSyncEnabled,
+                    strategyMode = strategyMode,
+                    profitPercent = profitPercent,
+                    onDeadlineDateChange = { deadlineDate = it },
+                    onDeadlineInfiniteChange = { deadlineInfinite = it },
+                    onGoalAmountChange = { goalAmount = it },
+                    onGoalSyncEnabledChange = { goalSyncEnabled = it },
+                    onStrategyModeChange = { strategyMode = it },
+                    onProfitPercentChange = { profitPercent = it },
+                    onConnect = {
+                        saveFinalSetupSettings(
+                            context = context,
+                            deadlineDate = deadlineDate,
+                            deadlineInfinite = deadlineInfinite,
+                            goalAmount = goalAmount,
+                            goalSyncEnabled = goalSyncEnabled,
+                            strategyMode = strategyMode,
+                            profitPercent = profitPercent
+                        )
+                        saveOnboardingCompleted(context, true)
+                        screen = HelloScreen.Done
+                    }
+                )
+
                 HelloScreen.Done -> DoneScreen()
             }
         }
@@ -206,7 +303,7 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                         saveBiometryEnabled(context, true)
                         isBiometryLoading = false
                         showBiometryPopup = false
-                        screen = HelloScreen.Done
+                        screen = HelloScreen.FinalSetup
                     },
                     onDismiss = {
                         isBiometryLoading = false
@@ -217,7 +314,7 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                 if (isBiometryLoading) return@BiometryPopup
                 saveBiometryEnabled(context, false)
                 showBiometryPopup = false
-                screen = HelloScreen.Done
+                screen = HelloScreen.FinalSetup
             }
         )
     }
@@ -340,6 +437,143 @@ private fun PinScreen(
 }
 
 @Composable
+private fun FinalSetupScreen(
+    deadlineDate: String,
+    deadlineInfinite: Boolean,
+    goalAmount: String,
+    goalSyncEnabled: Boolean,
+    strategyMode: StrategyMode,
+    profitPercent: String,
+    onDeadlineDateChange: (String) -> Unit,
+    onDeadlineInfiniteChange: (Boolean) -> Unit,
+    onGoalAmountChange: (String) -> Unit,
+    onGoalSyncEnabledChange: (Boolean) -> Unit,
+    onStrategyModeChange: (StrategyMode) -> Unit,
+    onProfitPercentChange: (String) -> Unit,
+    onConnect: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    val minimumDeadlineDate = remember { LocalDate.now().plusMonths(3) }
+    val minimumDeadlineText = remember(minimumDeadlineDate) {
+        minimumDeadlineDate.format(DeadlineDateFormatter)
+    }
+    val deadlineIsValid = deadlineInfinite || isDeadlineDateValid(
+        value = deadlineDate,
+        minimumDate = minimumDeadlineDate
+    )
+    val deadlineHint = when {
+        deadlineInfinite -> "Минимум: $minimumDeadlineText"
+        deadlineDate.isBlank() -> "Минимум: $minimumDeadlineText"
+        deadlineIsValid -> "Дата подходит"
+        else -> "Дата должна быть не раньше $minimumDeadlineText"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(horizontal = 24.dp, vertical = 32.dp)
+    ) {
+        AppLogo()
+        Spacer(modifier = Modifier.height(54.dp))
+        Text(
+            text = "Последняя настройка",
+            style = MaterialTheme.typography.headlineLarge,
+            color = AppPrimary
+        )
+        Spacer(modifier = Modifier.height(40.dp))
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(24.dp)
+        ) {
+            HelloSettingsSection(
+                title = "Срок",
+                description = "К этой дате стратегия будет завершена"
+            ) {
+                HelloDateInput(
+                    value = deadlineDate,
+                    placeholder = "Дата",
+                    onValueChange = onDeadlineDateChange,
+                    enabled = !deadlineInfinite,
+                    containerAlpha = if (deadlineInfinite) 0.4f else 1f
+                )
+                Text(
+                    text = deadlineHint,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AppMutedText
+                )
+                HelloSwitchRow(
+                    text = "Бесконечно",
+                    checked = deadlineInfinite,
+                    onCheckedChange = onDeadlineInfiniteChange
+                )
+            }
+
+            HelloDivider()
+
+            HelloSettingsSection(title = "Цель") {
+                HelloInput(
+                    value = goalAmount,
+                    placeholder = "Сумма ₽",
+                    onValueChange = onGoalAmountChange,
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Next
+                )
+                HelloSwitchRow(
+                    text = "Синхронизировать со сроком",
+                    checked = goalSyncEnabled,
+                    onCheckedChange = onGoalSyncEnabledChange
+                )
+                Text(
+                    text = "Если активно, система рассчитает необходимую доходность для достижения цели к дате",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AppMutedText
+                )
+            }
+
+            HelloDivider()
+
+            HelloSettingsSection(
+                title = "Режим стратегии",
+                description = "Система будет автоматически заменять бумаги при росте ключевой ставки"
+            ) {
+                HelloSegmentedControl(
+                    selectedMode = strategyMode,
+                    onModeChange = onStrategyModeChange
+                )
+            }
+
+            HelloDivider()
+
+            HelloSettingsSection(
+                title = "Вывод прибыли",
+                description = "Система будет запасать X процентов от дохода в месяц для вашего вывода"
+            ) {
+                HelloInput(
+                    value = profitPercent,
+                    placeholder = "Проценты (0-100%)",
+                    onValueChange = onProfitPercentChange,
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        HelloButton(
+            text = "Подключить",
+            enabled = deadlineIsValid,
+            loading = false,
+            onClick = onConnect
+        )
+    }
+}
+
+@Composable
 private fun DoneScreen() {
     Column(
         modifier = Modifier
@@ -357,7 +591,7 @@ private fun DoneScreen() {
             color = AppPrimary
         )
         Text(
-            text = "Стартовый сценарий готов к следующему экрану.",
+            text = "Все параметры сохранены на устройстве и готовы к следующему экрану.",
             style = MaterialTheme.typography.bodyLarge,
             color = AppMutedText,
             modifier = Modifier.padding(top = 8.dp)
@@ -387,56 +621,304 @@ private fun AppLogo() {
 }
 
 @Composable
+private fun HelloSettingsSection(
+    title: String,
+    description: String? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            color = AppPrimary
+        )
+        if (description != null) {
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppMutedText
+            )
+        }
+        content()
+    }
+}
+
+@Composable
+private fun HelloDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(AppBorder)
+    )
+}
+
+@Composable
 private fun HelloInput(
     value: String,
     placeholder: String,
     onValueChange: (String) -> Unit,
     keyboardType: KeyboardType,
     imeAction: ImeAction,
-    isPassword: Boolean = false
+    isPassword: Boolean = false,
+    enabled: Boolean = true,
+    containerAlpha: Float = 1f
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val borderColor by animateColorAsState(
-        targetValue = if (isFocused) AppPrimary else AppBorder,
+        targetValue = if (enabled && isFocused) AppPrimary else AppBorder,
         label = "hello_input_border"
     )
+    val textColor = if (enabled) AppPrimary else AppMutedText
 
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        singleLine = true,
-        textStyle = TextStyle(
-            color = AppPrimary,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 24.sp
-        ),
-        keyboardOptions = KeyboardOptions(
-            keyboardType = keyboardType,
-            imeAction = imeAction
-        ),
-        visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+    Box(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(containerAlpha)
             .clip(RoundedCornerShape(12.dp))
             .border(1.dp, borderColor, RoundedCornerShape(12.dp))
             .padding(horizontal = 16.dp, vertical = 16.dp)
-            .onFocusChanged { isFocused = it.isFocused },
-        decorationBox = { innerTextField ->
-            Box {
-                if (value.isEmpty()) {
-                    Text(
-                        text = placeholder,
-                        color = AppMutedText,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = 24.sp
-                    )
+    ) {
+        if (enabled) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = textColor,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    lineHeight = 24.sp
+                ),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = keyboardType,
+                    imeAction = imeAction
+                ),
+                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { isFocused = it.isFocused },
+                decorationBox = { innerTextField ->
+                    Box {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                color = AppMutedText,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 24.sp
+                            )
+                        }
+                        innerTextField()
+                    }
                 }
-                innerTextField()
+            )
+        } else {
+            Text(
+                text = value.ifEmpty { placeholder },
+                color = AppMutedText,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 24.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun HelloDateInput(
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean = true,
+    containerAlpha: Float = 1f
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (enabled && isFocused) AppPrimary else AppBorder,
+        label = "hello_date_input_border"
+    )
+    val textColor = if (enabled) AppPrimary else AppMutedText
+    val textFieldValue = remember(value) {
+        TextFieldValue(
+            text = value,
+            selection = TextRange(value.length)
+        )
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(containerAlpha)
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+            .padding(horizontal = 16.dp, vertical = 16.dp)
+    ) {
+        if (enabled) {
+            BasicTextField(
+                value = textFieldValue,
+                onValueChange = { updatedValue ->
+                    onValueChange(formatDeadlineDateInput(updatedValue.text))
+                },
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = textColor,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    lineHeight = 24.sp
+                ),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Next
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { isFocused = it.isFocused },
+                decorationBox = { innerTextField ->
+                    Box {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                color = AppMutedText,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 24.sp
+                            )
+                        }
+                        innerTextField()
+                    }
+                }
+            )
+        } else {
+            Text(
+                text = value.ifEmpty { placeholder },
+                color = AppMutedText,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 24.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun HelloSwitchRow(
+    text: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) { onCheckedChange(!checked) },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        HelloSwitch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = AppMutedText
+        )
+    }
+}
+
+@Composable
+private fun HelloSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val backgroundColor by animateColorAsState(
+        targetValue = if (checked) AppPrimary else AppSurface,
+        label = "hello_switch_background"
+    )
+    val thumbColor by animateColorAsState(
+        targetValue = if (checked) AppDarkAccent else AppPrimary,
+        label = "hello_switch_thumb"
+    )
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 18.dp else 0.dp,
+        animationSpec = tween(180),
+        label = "hello_switch_offset"
+    )
+
+    Box(
+        modifier = Modifier
+            .width(52.dp)
+            .height(30.dp)
+            .clip(RoundedCornerShape(100.dp))
+            .background(backgroundColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) { onCheckedChange(!checked) }
+            .padding(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = thumbOffset)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(thumbColor)
+        )
+    }
+}
+
+@Composable
+private fun HelloSegmentedControl(
+    selectedMode: StrategyMode,
+    onModeChange: (StrategyMode) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(AppSurface)
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        StrategyMode.values().forEach { mode ->
+            val selected = mode == selectedMode
+            val backgroundColor by animateColorAsState(
+                targetValue = if (selected) AppPrimary else Color.Transparent,
+                label = "segmented_background_${mode.name}"
+            )
+            val textColor by animateColorAsState(
+                targetValue = if (selected) AppPrimaryText else AppMutedText,
+                label = "segmented_text_${mode.name}"
+            )
+            val interactionSource = remember { MutableInteractionSource() }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(backgroundColor)
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null
+                    ) { onModeChange(mode) }
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = mode.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = textColor
+                )
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -732,36 +1214,89 @@ private fun BiometryPopup(
     }
 }
 
-private fun saveLocalPin(context: Context, pin: String) {
-    runCatching {
+private fun securePreferences(context: Context): SharedPreferences? {
+    return runCatching {
         val masterKey = MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
-        val preferences = EncryptedSharedPreferences.create(
+
+        EncryptedSharedPreferences.create(
             context,
-            "chill_invest_secure",
+            SecurePrefsName,
             masterKey,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
-        preferences.edit().putString("local_pin", pin).apply()
-    }
+    }.getOrNull()
+}
+
+private fun loadStoredHelloState(context: Context): StoredHelloState {
+    val preferences = securePreferences(context) ?: return StoredHelloState()
+    val storedMode = preferences.getString(KeyStrategyMode, StrategyMode.Adaptive.name)
+    val strategyMode = StrategyMode.values().firstOrNull { it.name == storedMode } ?: StrategyMode.Adaptive
+
+    return StoredHelloState(
+        server = preferences.getString(KeyServer, "") ?: "",
+        login = preferences.getString(KeyLogin, "") ?: "",
+        password = preferences.getString(KeyPassword, "") ?: "",
+        deadlineDate = preferences.getString(KeyDeadlineDate, "") ?: "",
+        deadlineInfinite = preferences.getBoolean(KeyDeadlineInfinite, true),
+        goalAmount = preferences.getString(KeyGoalAmount, "") ?: "",
+        goalSyncEnabled = preferences.getBoolean(KeyGoalSyncEnabled, false),
+        strategyMode = strategyMode,
+        profitPercent = preferences.getString(KeyProfitPercent, "") ?: "",
+        onboardingCompleted = preferences.getBoolean(KeyOnboardingCompleted, false)
+    )
+}
+
+private fun saveWelcomeSettings(
+    context: Context,
+    server: String,
+    login: String,
+    password: String
+) {
+    securePreferences(context)?.edit()
+        ?.putString(KeyServer, server)
+        ?.putString(KeyLogin, login)
+        ?.putString(KeyPassword, password)
+        ?.apply()
+}
+
+private fun saveLocalPin(context: Context, pin: String) {
+    securePreferences(context)?.edit()
+        ?.putString(KeyLocalPin, pin)
+        ?.apply()
 }
 
 private fun saveBiometryEnabled(context: Context, enabled: Boolean) {
-    runCatching {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        val preferences = EncryptedSharedPreferences.create(
-            context,
-            "chill_invest_secure",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-        preferences.edit().putBoolean("biometry_enabled", enabled).apply()
-    }
+    securePreferences(context)?.edit()
+        ?.putBoolean(KeyBiometryEnabled, enabled)
+        ?.apply()
+}
+
+private fun saveFinalSetupSettings(
+    context: Context,
+    deadlineDate: String,
+    deadlineInfinite: Boolean,
+    goalAmount: String,
+    goalSyncEnabled: Boolean,
+    strategyMode: StrategyMode,
+    profitPercent: String
+) {
+    securePreferences(context)?.edit()
+        ?.putString(KeyDeadlineDate, deadlineDate)
+        ?.putBoolean(KeyDeadlineInfinite, deadlineInfinite)
+        ?.putString(KeyGoalAmount, goalAmount)
+        ?.putBoolean(KeyGoalSyncEnabled, goalSyncEnabled)
+        ?.putString(KeyStrategyMode, strategyMode.name)
+        ?.putString(KeyProfitPercent, profitPercent)
+        ?.apply()
+}
+
+private fun saveOnboardingCompleted(context: Context, completed: Boolean) {
+    securePreferences(context)?.edit()
+        ?.putBoolean(KeyOnboardingCompleted, completed)
+        ?.apply()
 }
 
 private fun showBiometricPrompt(
@@ -794,6 +1329,35 @@ private fun showBiometricPrompt(
     )
 
     biometricPrompt.authenticate(promptInfo)
+}
+
+private fun formatDeadlineDateInput(value: String): String {
+    val digits = value.filter(Char::isDigit).take(8)
+    val builder = StringBuilder()
+
+    digits.forEachIndexed { index, char ->
+        if (index == 2 || index == 4) {
+            builder.append('.')
+        }
+        builder.append(char)
+    }
+
+    return builder.toString()
+}
+
+private fun isDeadlineDateValid(
+    value: String,
+    minimumDate: LocalDate = LocalDate.now().plusMonths(3)
+): Boolean {
+    val parsedDate = parseDeadlineDate(value) ?: return false
+    return !parsedDate.isBefore(minimumDate)
+}
+
+private fun parseDeadlineDate(value: String): LocalDate? {
+    if (value.length != 10) return null
+    return runCatching {
+        LocalDate.parse(value, DeadlineDateFormatter)
+    }.getOrNull()
 }
 
 @Preview(showBackground = true, backgroundColor = 0xFF15181F)
