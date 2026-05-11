@@ -3,6 +3,7 @@ package components.page
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.biometric.BiometricPrompt
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -31,8 +32,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -48,6 +51,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,6 +68,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +77,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,10 +87,14 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.chillinvest.R
 import com.example.chillinvest.ui.theme.AppBackground
+import com.example.chillinvest.ui.theme.AppAccentOrange
+import com.example.chillinvest.ui.theme.AppAccentOrangeSoft
+import com.example.chillinvest.ui.theme.AppAccentYellow
 import com.example.chillinvest.ui.theme.AppBorder
 import com.example.chillinvest.ui.theme.AppDarkAccent
 import com.example.chillinvest.ui.theme.AppMutedText
 import com.example.chillinvest.ui.theme.AppOverlay
+import com.example.chillinvest.ui.theme.AppPositive
 import com.example.chillinvest.ui.theme.AppPrimary
 import com.example.chillinvest.ui.theme.AppPrimaryText
 import com.example.chillinvest.ui.theme.AppSurface
@@ -115,7 +126,8 @@ private enum class HelloScreen {
     CreatePin,
     ConfirmPin,
     FinalSetup,
-    Done
+    Unlock,
+    Home
 }
 
 private enum class StrategyMode(val title: String) {
@@ -127,6 +139,8 @@ private data class StoredHelloState(
     val server: String = "",
     val login: String = "",
     val password: String = "",
+    val localPin: String = "",
+    val biometryEnabled: Boolean = false,
     val deadlineDate: String = "",
     val deadlineInfinite: Boolean = true,
     val goalAmount: String = "",
@@ -142,18 +156,23 @@ fun HelloFlow(modifier: Modifier = Modifier) {
     val storedState = remember(context) { loadStoredHelloState(context) }
     var screen by rememberSaveable {
         mutableStateOf(
-            if (storedState.onboardingCompleted) {
-                HelloScreen.Done
-            } else {
-                HelloScreen.Welcome
+            when {
+                !storedState.onboardingCompleted -> HelloScreen.Welcome
+                storedState.localPin.isNotBlank() -> HelloScreen.Unlock
+                else -> HelloScreen.Home
             }
         )
     }
     var server by rememberSaveable { mutableStateOf(storedState.server) }
     var login by rememberSaveable { mutableStateOf(storedState.login) }
     var password by rememberSaveable { mutableStateOf(storedState.password) }
+    var localPin by rememberSaveable { mutableStateOf(storedState.localPin) }
+    var biometryEnabled by rememberSaveable { mutableStateOf(storedState.biometryEnabled) }
     var pin by rememberSaveable { mutableStateOf("") }
     var confirmPin by rememberSaveable { mutableStateOf("") }
+    var pinErrorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var unlockPin by rememberSaveable { mutableStateOf("") }
+    var unlockErrorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var deadlineDate by rememberSaveable { mutableStateOf(storedState.deadlineDate) }
     var deadlineInfinite by rememberSaveable { mutableStateOf(storedState.deadlineInfinite) }
     var goalAmount by rememberSaveable { mutableStateOf(storedState.goalAmount) }
@@ -162,6 +181,7 @@ fun HelloFlow(modifier: Modifier = Modifier) {
     var profitPercent by rememberSaveable { mutableStateOf(storedState.profitPercent) }
     var showBiometryPopup by rememberSaveable { mutableStateOf(false) }
     var isBiometryLoading by rememberSaveable { mutableStateOf(false) }
+    var isUnlockBiometryLoading by rememberSaveable { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -206,6 +226,7 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                         server = nextServer
                         login = nextLogin
                         password = nextPassword
+                        pinErrorMessage = null
                         saveWelcomeSettings(
                             context = context,
                             server = nextServer,
@@ -219,8 +240,11 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                 HelloScreen.CreatePin -> PinScreen(
                     title = "Давайте придумаем пароль",
                     pin = pin,
+                    errorMessage = pinErrorMessage,
+                    biometryEnabled = false,
                     onDigitClick = {
                         if (pin.length < 4) {
+                            pinErrorMessage = null
                             pin += it
                             if (pin.length == 4) {
                                 screen = HelloScreen.ConfirmPin
@@ -231,21 +255,27 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                         if (pin.isNotEmpty()) {
                             pin = pin.dropLast(1)
                         }
-                    }
+                    },
+                    onBiometryClick = null
                 )
 
                 HelloScreen.ConfirmPin -> PinScreen(
                     title = "Введите еще раз",
                     pin = confirmPin,
+                    errorMessage = pinErrorMessage,
+                    biometryEnabled = false,
                     onDigitClick = {
                         if (confirmPin.length < 4) {
+                            pinErrorMessage = null
                             confirmPin += it
                             if (confirmPin.length == 4) {
                                 if (confirmPin == pin) {
                                     saveLocalPin(context, pin)
+                                    localPin = pin
                                     showBiometryPopup = true
                                 } else {
                                     confirmPin = ""
+                                    pinErrorMessage = "PIN-коды не совпадают"
                                 }
                             }
                         }
@@ -254,7 +284,8 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                         if (confirmPin.isNotEmpty()) {
                             confirmPin = confirmPin.dropLast(1)
                         }
-                    }
+                    },
+                    onBiometryClick = null
                 )
 
                 HelloScreen.FinalSetup -> FinalSetupScreen(
@@ -281,42 +312,103 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                             profitPercent = profitPercent
                         )
                         saveOnboardingCompleted(context, true)
-                        screen = HelloScreen.Done
+                        screen = HelloScreen.Home
                     }
                 )
 
-                HelloScreen.Done -> DoneScreen()
+                HelloScreen.Unlock -> PinScreen(
+                    title = "Здравствуйте",
+                    subtitle = "Введите PIN-код, чтобы открыть приложение",
+                    pin = unlockPin,
+                    errorMessage = unlockErrorMessage,
+                    biometryEnabled = biometryEnabled,
+                    onDigitClick = { digit ->
+                        if (unlockPin.length < 4) {
+                            unlockErrorMessage = null
+                            val nextPin = unlockPin + digit
+                            unlockPin = nextPin
+                            if (nextPin.length == 4) {
+                                if (nextPin == localPin) {
+                                    unlockPin = ""
+                                    screen = HelloScreen.Home
+                                } else {
+                                    unlockPin = ""
+                                    unlockErrorMessage = "Неверный PIN-код"
+                                }
+                            }
+                        }
+                    },
+                    onBackspace = {
+                        if (unlockPin.isNotEmpty()) {
+                            unlockPin = unlockPin.dropLast(1)
+                        }
+                    },
+                    onBiometryClick = {
+                        val activity = context as? FragmentActivity ?: return@PinScreen
+                        if (isUnlockBiometryLoading) return@PinScreen
+
+                        isUnlockBiometryLoading = true
+                        showBiometricPrompt(
+                            activity = activity,
+                            onSuccess = {
+                                isUnlockBiometryLoading = false
+                                unlockPin = ""
+                                unlockErrorMessage = null
+                                screen = HelloScreen.Home
+                            },
+                            onDismiss = {
+                                isUnlockBiometryLoading = false
+                            }
+                        )
+                    }
+                )
+
+                HelloScreen.Home -> HomeScreen(
+                    state = buildHomePlaceholderState(
+                        goalAmount = goalAmount.ifBlank { storedState.goalAmount },
+                        deadlineDate = deadlineDate.ifBlank { storedState.deadlineDate },
+                        deadlineInfinite = deadlineInfinite,
+                        profitPercent = profitPercent.ifBlank { storedState.profitPercent }
+                    ),
+                    onStopStrategyConfirm = {
+                        // TODO: replace with DELETE strategy request.
+                    },
+                    onAnalyticsClick = {}
+                )
             }
         }
 
-        BiometryPopup(
-            visible = showBiometryPopup,
-            loading = isBiometryLoading,
-            onEnable = {
-                val activity = context as? FragmentActivity ?: return@BiometryPopup
-                if (isBiometryLoading) return@BiometryPopup
+        if (showBiometryPopup) {
+            BiometryPopup(
+                loading = isBiometryLoading,
+                onEnable = {
+                    val activity = context as? FragmentActivity ?: return@BiometryPopup
+                    if (isBiometryLoading) return@BiometryPopup
 
-                isBiometryLoading = true
-                showBiometricPrompt(
-                    activity = activity,
-                    onSuccess = {
-                        saveBiometryEnabled(context, true)
-                        isBiometryLoading = false
-                        showBiometryPopup = false
-                        screen = HelloScreen.FinalSetup
-                    },
-                    onDismiss = {
-                        isBiometryLoading = false
-                    }
-                )
-            },
-            onSkip = {
-                if (isBiometryLoading) return@BiometryPopup
-                saveBiometryEnabled(context, false)
-                showBiometryPopup = false
-                screen = HelloScreen.FinalSetup
-            }
-        )
+                    isBiometryLoading = true
+                    showBiometricPrompt(
+                        activity = activity,
+                        onSuccess = {
+                            biometryEnabled = true
+                            saveBiometryEnabled(context, true)
+                            isBiometryLoading = false
+                            showBiometryPopup = false
+                            screen = HelloScreen.FinalSetup
+                        },
+                        onDismiss = {
+                            isBiometryLoading = false
+                        }
+                    )
+                },
+                onSkip = {
+                    if (isBiometryLoading) return@BiometryPopup
+                    biometryEnabled = false
+                    saveBiometryEnabled(context, false)
+                    showBiometryPopup = false
+                    screen = HelloScreen.FinalSetup
+                }
+            )
+        }
     }
 }
 
@@ -399,9 +491,13 @@ private fun WelcomeScreen(
 @Composable
 private fun PinScreen(
     title: String,
+    subtitle: String? = null,
     pin: String,
+    errorMessage: String? = null,
+    biometryEnabled: Boolean,
     onDigitClick: (Int) -> Unit,
-    onBackspace: () -> Unit
+    onBackspace: () -> Unit,
+    onBiometryClick: (() -> Unit)?
 ) {
     Box(
         modifier = Modifier
@@ -414,15 +510,31 @@ private fun PinScreen(
                 .fillMaxSize()
                 .padding(horizontal = 24.dp)
         ) {
-            AppLogo()
-            Spacer(modifier = Modifier.height(66.dp))
+            AppCompactLogo()
+            Spacer(modifier = Modifier.height(72.dp))
             Text(
                 text = title,
                 style = MaterialTheme.typography.headlineLarge,
                 color = AppPrimary
             )
-            Spacer(modifier = Modifier.height(if (title == "Введите еще раз") 153.dp else 107.dp))
+            if (subtitle != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AppMutedText
+                )
+            }
+            Spacer(modifier = Modifier.height(if (subtitle != null) 145.dp else 122.dp))
             PinIndicators(activeCount = pin.length)
+            AnimatedVisibility(visible = errorMessage != null) {
+                Text(
+                    text = errorMessage.orEmpty(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AppAccentOrange,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            }
         }
 
         PinKeyboard(
@@ -430,8 +542,10 @@ private fun PinScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp),
+            biometryEnabled = biometryEnabled,
             onDigitClick = onDigitClick,
-            onBackspace = onBackspace
+            onBackspace = onBackspace,
+            onBiometryClick = onBiometryClick
         )
     }
 }
@@ -617,6 +731,727 @@ private fun AppLogo() {
             fontWeight = FontWeight.SemiBold,
             lineHeight = 46.sp
         )
+    }
+}
+
+private data class HomeState(
+    val totalAmount: String,
+    val monthlyChange: String,
+    val monthlyLabel: String,
+    val goal: HomeGoalState,
+    val portfolio: List<PortfolioSliceState>
+)
+
+private data class HomeGoalState(
+    val targetAmount: String,
+    val progress: Float,
+    val progressLabel: String,
+    val periodLabel: String
+)
+
+private data class PortfolioSliceState(
+    val label: String,
+    val fraction: Float,
+    val color: Color
+)
+
+private enum class PopupButtonStyle {
+    Primary,
+    Secondary,
+    Accent
+}
+
+private data class PopupButtonConfig(
+    val text: String,
+    val style: PopupButtonStyle,
+    val onClick: () -> Unit = {},
+    val enabled: Boolean = true,
+    val loading: Boolean = false,
+    val dismissOnClick: Boolean = true
+)
+
+private enum class HomePopup {
+    Goal,
+    Portfolio,
+    StopStrategy
+}
+
+@Composable
+private fun AppCompactLogo() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Image(
+            painter = painterResource(R.drawable.logo),
+            contentDescription = "Логотип Chill Invest",
+            modifier = Modifier.size(30.dp)
+        )
+        Text(
+            text = "Chill.Invest",
+            style = MaterialTheme.typography.titleLarge,
+            color = AppPrimary
+        )
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    state: HomeState,
+    onStopStrategyConfirm: () -> Unit,
+    onAnalyticsClick: () -> Unit
+) {
+    var activePopup by rememberSaveable { mutableStateOf<HomePopup?>(null) }
+    val blurRadius by animateDpAsState(
+        targetValue = if (activePopup != null) 18.dp else 0.dp,
+        animationSpec = tween(300),
+        label = "home_popup_blur"
+    )
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(if (blurRadius > 0.dp) Modifier.blur(blurRadius) else Modifier)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(start = 24.dp, top = 32.dp, end = 24.dp, bottom = 70.dp),
+            verticalArrangement = Arrangement.spacedBy(64.dp)
+        ) {
+            AppCompactLogo()
+
+            Column(verticalArrangement = Arrangement.spacedBy(40.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "₽",
+                                color = AppPrimary,
+                                fontSize = 44.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 54.sp
+                            )
+                            BalanceAmountText(amount = state.totalAmount)
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = state.monthlyChange,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = AppPositive
+                            )
+                            Text(
+                                text = state.monthlyLabel,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = AppPrimary
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        HomeActionButton(
+                            modifier = Modifier.weight(1f),
+                            text = "Завершить",
+                            iconRes = R.drawable.close,
+                            containerColor = AppAccentOrangeSoft,
+                            contentColor = AppAccentOrange,
+                            onClick = { activePopup = HomePopup.StopStrategy }
+                        )
+                        HomeActionButton(
+                            modifier = Modifier.weight(1f),
+                            text = "Аналитика",
+                            iconRes = R.drawable.anal,
+                            containerColor = AppSurface,
+                            contentColor = AppPrimary,
+                            onClick = onAnalyticsClick
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    HomeCard(onClick = { activePopup = HomePopup.Goal }) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Text(
+                                text = "Цель",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = AppPrimary
+                            )
+                            Text(
+                                text = state.goal.targetAmount,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = AppMutedText
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            GoalProgressBar(
+                                modifier = Modifier.weight(1f),
+                                progress = state.goal.progress
+                            )
+                            Text(
+                                text = state.goal.progressLabel,
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = AppPrimary
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        GoalPeriodButton(
+                            text = state.goal.periodLabel,
+                            onClick = { activePopup = HomePopup.Goal }
+                        )
+                    }
+
+                    HomeCard(onClick = { activePopup = HomePopup.Portfolio }) {
+                        Text(
+                            text = "Портфель",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = AppPrimary
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            state.portfolio.forEach { slice ->
+                                PortfolioSliceBar(
+                                    modifier = Modifier.weight(1f),
+                                    slice = slice
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        when (activePopup) {
+            HomePopup.Goal -> HomeInfoPopup(
+                title = "Цель",
+                description = "Это ваша цель которую вы установили при настройке приложения. Виджет показывает сколько процентов накоплено, а снизу отображается расчет сколько понадобится времени для достижения цели",
+                onDismiss = { activePopup = null }
+            )
+
+            HomePopup.Portfolio -> HomeInfoPopup(
+                title = "Портфель",
+                description = "Отображает уровень диверсификации портфеля в диаграммах, показывая сколько процентов от портфеля вложено в те или иные активы",
+                onDismiss = { activePopup = null }
+            )
+
+            HomePopup.StopStrategy -> StopStrategyPopup(
+                onDismiss = { activePopup = null },
+                onConfirm = {
+                    onStopStrategyConfirm()
+                }
+            )
+
+            null -> Unit
+        }
+    }
+}
+
+@Composable
+private fun BalanceAmountText(amount: String) {
+    val delimiterIndex = amount.indexOf(',')
+    val primaryPart = if (delimiterIndex >= 0) amount.substring(0, delimiterIndex) else amount
+    val decimalPart = if (delimiterIndex >= 0) amount.substring(delimiterIndex) else ""
+
+    Text(
+        text = buildAnnotatedString {
+            withStyle(SpanStyle(color = AppPrimary)) {
+                append(primaryPart)
+            }
+            if (decimalPart.isNotEmpty()) {
+                withStyle(SpanStyle(color = AppMutedText)) {
+                    append(decimalPart)
+                }
+            }
+        },
+        fontSize = 44.sp,
+        fontWeight = FontWeight.SemiBold,
+        lineHeight = 54.sp
+    )
+}
+
+@Composable
+private fun HomeActionButton(
+    modifier: Modifier = Modifier,
+    text: String,
+    iconRes: Int,
+    containerColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.98f else 1f,
+        animationSpec = spring(stiffness = 700f),
+        label = "home_action_button_scale"
+    )
+
+    Column(
+        modifier = modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(28.dp))
+            .background(containerColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = contentColor
+        )
+    }
+}
+
+@Composable
+private fun HomeCard(
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(32.dp))
+            .border(1.dp, AppBorder, RoundedCornerShape(32.dp))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = onClick != null,
+                onClick = { onClick?.invoke() }
+            )
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+        content = content
+    )
+}
+
+@Composable
+private fun GoalProgressBar(
+    modifier: Modifier = Modifier,
+    progress: Float
+) {
+    Box(
+        modifier = modifier
+            .height(46.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(AppSurface)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(progress.coerceIn(0f, 1f))
+                .background(AppPrimary)
+        )
+    }
+}
+
+@Composable
+private fun GoalPeriodButton(
+    text: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Image(
+            painter = painterResource(R.drawable.calend),
+            contentDescription = null,
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = AppPrimary
+        )
+    }
+}
+
+@Composable
+private fun PortfolioSliceBar(
+    modifier: Modifier = Modifier,
+    slice: PortfolioSliceState
+) {
+    Box(
+        modifier = modifier
+            .height(120.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(AppSurface)
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .fillMaxHeight(slice.fraction.coerceIn(0.18f, 1f))
+                .clip(RoundedCornerShape(12.dp))
+                .background(slice.color)
+                .padding(8.dp)
+        ) {
+            Text(
+                text = slice.label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppPrimaryText
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeInfoPopup(
+    title: String,
+    description: String,
+    onDismiss: () -> Unit
+) {
+    BottomPopupSheet(
+        onDismissRequest = onDismiss,
+        title = title,
+        body = description,
+        buttons = listOf(
+            PopupButtonConfig(
+                text = "Понятно!",
+                style = PopupButtonStyle.Primary
+            )
+        )
+    )
+}
+
+@Composable
+private fun StopStrategyPopup(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    BottomPopupSheet(
+        onDismissRequest = onDismiss,
+        iconRes = R.drawable.close,
+        title = "Вы уверены?",
+        body = "Отключение стратегии отключит все связи приложения с вашим брокерским счетом. Для возобновления потребуется заново пройти настройку",
+        buttons = listOf(
+            PopupButtonConfig(
+                text = "Остановить",
+                style = PopupButtonStyle.Accent,
+                onClick = onConfirm
+            ),
+            PopupButtonConfig(
+                text = "Отмена",
+                style = PopupButtonStyle.Secondary
+            )
+        )
+    )
+}
+
+@Composable
+private fun BottomPopupSheet(
+    onDismissRequest: () -> Unit,
+    iconRes: Int? = null,
+    title: String,
+    body: String,
+    buttons: List<PopupButtonConfig>
+) {
+    val scope = rememberCoroutineScope()
+    var isVisible by remember { mutableStateOf(false) }
+    var isClosing by remember { mutableStateOf(false) }
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (isVisible) 0.4f else 0f,
+        animationSpec = tween(durationMillis = if (isVisible) 220 else 180),
+        label = "popup_overlay_alpha"
+    )
+
+    LaunchedEffect(Unit) {
+        isVisible = true
+    }
+
+    fun requestClose() {
+        if (isClosing) return
+        scope.launch {
+            isClosing = true
+            isVisible = false
+            delay(260)
+            onDismissRequest()
+        }
+    }
+
+    BackHandler(onBack = ::requestClose)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(AppOverlay.copy(alpha = overlayAlpha))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    enabled = !isClosing,
+                    onClick = ::requestClose
+                )
+        )
+
+        AnimatedVisibility(
+            visible = isVisible,
+            enter = fadeIn(animationSpec = tween(220)) + slideInVertically(
+                animationSpec = tween(320),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(animationSpec = tween(180)) + slideOutVertically(
+                animationSpec = tween(260),
+                targetOffsetY = { it }
+            ),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
+                    .border(
+                        width = 1.dp,
+                        color = AppPrimary.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
+                    )
+                    .background(AppBackground)
+                    .padding(horizontal = 32.dp, vertical = 32.dp)
+                    .height(500.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(width = 80.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(AppPrimary)
+                )
+                Spacer(modifier = Modifier.height(28.dp))
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    if (iconRes != null) {
+                        Image(
+                            painter = painterResource(iconRes),
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+                    Text(
+                        text = title,
+                        color = AppPrimary,
+                        fontSize = 44.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 54.sp
+                    )
+                    if (body.isNotBlank()) {
+                        Text(
+                            text = body,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppPrimary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    buttons.take(2).forEach { button ->
+                        PopupActionButton(
+                            button = button,
+                            onDismiss = ::requestClose
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PopupActionButton(
+    button: PopupButtonConfig,
+    onDismiss: () -> Unit
+) {
+    val handleClick = {
+        button.onClick()
+        if (button.dismissOnClick) {
+            onDismiss()
+        }
+    }
+
+    when (button.style) {
+        PopupButtonStyle.Primary -> HelloButton(
+            text = button.text,
+            enabled = button.enabled,
+            loading = button.loading,
+            onClick = handleClick
+        )
+
+        PopupButtonStyle.Secondary -> HelloButton(
+            text = button.text,
+            enabled = button.enabled,
+            loading = button.loading,
+            onClick = handleClick,
+            dark = true
+        )
+
+        PopupButtonStyle.Accent -> PopupAccentButton(
+            text = button.text,
+            enabled = button.enabled,
+            onClick = handleClick
+        )
+    }
+}
+
+@Composable
+private fun PopupAccentButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.98f else 1f,
+        animationSpec = spring(stiffness = 700f),
+        label = "popup_action_button_scale"
+    )
+    val containerColor by animateColorAsState(
+        targetValue = if (enabled) AppAccentOrangeSoft else AppAccentOrangeSoft.copy(alpha = 0.45f),
+        label = "popup_action_button_background"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (enabled) AppAccentOrange else AppAccentOrange.copy(alpha = 0.55f),
+        label = "popup_action_button_content"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(scale)
+            .clip(RoundedCornerShape(28.dp))
+            .background(containerColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick
+            )
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = contentColor
+        )
+    }
+}
+
+private fun buildHomePlaceholderState(
+    goalAmount: String,
+    deadlineDate: String,
+    deadlineInfinite: Boolean,
+    profitPercent: String
+): HomeState {
+    // TODO: replace this stub with portfolio summary and allocation GET requests.
+    val totalAmountValue = 100_000
+    val normalizedGoal = parseCurrencyValue(goalAmount)
+    val progress = if (normalizedGoal > 0) {
+        (totalAmountValue.toFloat() / normalizedGoal.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0.2f
+    }
+    val periodLabel = resolveGoalPeriodLabel(
+        deadlineDate = deadlineDate,
+        deadlineInfinite = deadlineInfinite
+    )
+    val profitLabel = profitPercent.filter(Char::isDigit).takeIf { it.isNotBlank() }
+        ?.let { "+12 400 ($it%)" }
+        ?: "+12 400 (16%)"
+
+    return HomeState(
+        totalAmount = "100 000,00",
+        monthlyChange = profitLabel,
+        monthlyLabel = "за месяц",
+        goal = HomeGoalState(
+            targetAmount = if (normalizedGoal > 0) formatCurrencyAmount(normalizedGoal) else "500 000₽",
+            progress = progress,
+            progressLabel = "${(progress * 100).toInt()}%",
+            periodLabel = periodLabel
+        ),
+        portfolio = listOf(
+            PortfolioSliceState(label = "ОФЗ", fraction = 0.64f, color = AppPrimary),
+            PortfolioSliceState(label = "Корп.", fraction = 0.5f, color = AppAccentOrange),
+            PortfolioSliceState(label = "Золото", fraction = 0.76f, color = AppAccentYellow)
+        )
+    )
+}
+
+private fun parseCurrencyValue(value: String): Int {
+    return value.filter(Char::isDigit).toIntOrNull() ?: 0
+}
+
+private fun formatCurrencyAmount(value: Int): String {
+    return value.toString()
+        .reversed()
+        .chunked(3)
+        .joinToString(" ")
+        .reversed() + "₽"
+}
+
+private fun resolveGoalPeriodLabel(
+    deadlineDate: String,
+    deadlineInfinite: Boolean
+): String {
+    if (deadlineInfinite) return "Без срока"
+
+    val parsedDate = parseDeadlineDate(deadlineDate) ?: return "6 месяцев"
+    val monthsLeft = ((parsedDate.year - LocalDate.now().year) * 12) +
+        (parsedDate.monthValue - LocalDate.now().monthValue)
+
+    return when {
+        monthsLeft <= 0 -> deadlineDate
+        monthsLeft == 1 -> "1 месяц"
+        monthsLeft in 2..4 -> "$monthsLeft месяца"
+        else -> "$monthsLeft месяцев"
     }
 }
 
@@ -1005,8 +1840,10 @@ private fun PinIndicators(activeCount: Int) {
 @Composable
 private fun PinKeyboard(
     modifier: Modifier = Modifier,
+    biometryEnabled: Boolean,
     onDigitClick: (Int) -> Unit,
-    onBackspace: () -> Unit
+    onBackspace: () -> Unit,
+    onBiometryClick: (() -> Unit)?
 ) {
     Column(
         modifier = modifier,
@@ -1022,8 +1859,8 @@ private fun PinKeyboard(
             IconKey(
                 modifier = Modifier.weight(1f),
                 painterRes = R.drawable.biometry,
-                enabled = false,
-                onClick = {}
+                enabled = biometryEnabled,
+                onClick = { onBiometryClick?.invoke() }
             )
             DigitKey(
                 modifier = Modifier.weight(1f),
@@ -1134,84 +1971,31 @@ private fun IconKey(
 
 @Composable
 private fun BiometryPopup(
-    visible: Boolean,
     loading: Boolean,
     onEnable: () -> Unit,
     onSkip: () -> Unit
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(animationSpec = tween(220)) + slideInVertically(
-            animationSpec = tween(320),
-            initialOffsetY = { it }
-        ),
-        exit = fadeOut(animationSpec = tween(180)) + slideOutVertically(
-            animationSpec = tween(260),
-            targetOffsetY = { it }
-        ),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(AppOverlay)
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {}
-        ) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
-                    .background(AppBackground)
-                    .border(
-                        width = 1.dp,
-                        color = AppPrimary.copy(alpha = 0.4f),
-                        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
-                    )
-                    .padding(horizontal = 32.dp, vertical = 32.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .size(width = 80.dp, height = 4.dp)
-                        .clip(RoundedCornerShape(100.dp))
-                        .background(AppPrimary)
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Image(
-                    painter = painterResource(R.drawable.biometry),
-                    contentDescription = "Биометрия",
-                    modifier = Modifier.size(48.dp)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Подключить биометрию?",
-                    style = MaterialTheme.typography.headlineLarge.copy(fontSize = 44.sp, lineHeight = 52.sp),
-                    color = AppPrimary
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HelloButton(
-                        text = "Подключить",
-                        enabled = true,
-                        loading = loading,
-                        onClick = onEnable
-                    )
-                    HelloButton(
-                        text = "Не подключать",
-                        enabled = !loading,
-                        loading = false,
-                        onClick = onSkip,
-                        dark = true
-                    )
-                }
-            }
-        }
-    }
+    BottomPopupSheet(
+        onDismissRequest = onSkip,
+        iconRes = R.drawable.biometry,
+        title = "Подключить биометрию?",
+        body = "",
+        buttons = listOf(
+            PopupButtonConfig(
+                text = "Подключить",
+                style = PopupButtonStyle.Primary,
+                onClick = onEnable,
+                loading = loading,
+                dismissOnClick = false
+            ),
+            PopupButtonConfig(
+                text = "Не подключать",
+                style = PopupButtonStyle.Secondary,
+                onClick = onSkip,
+                enabled = !loading
+            )
+        )
+    )
 }
 
 private fun securePreferences(context: Context): SharedPreferences? {
@@ -1239,6 +2023,8 @@ private fun loadStoredHelloState(context: Context): StoredHelloState {
         server = preferences.getString(KeyServer, "") ?: "",
         login = preferences.getString(KeyLogin, "") ?: "",
         password = preferences.getString(KeyPassword, "") ?: "",
+        localPin = preferences.getString(KeyLocalPin, "") ?: "",
+        biometryEnabled = preferences.getBoolean(KeyBiometryEnabled, false),
         deadlineDate = preferences.getString(KeyDeadlineDate, "") ?: "",
         deadlineInfinite = preferences.getBoolean(KeyDeadlineInfinite, true),
         goalAmount = preferences.getString(KeyGoalAmount, "") ?: "",
