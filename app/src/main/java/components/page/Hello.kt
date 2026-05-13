@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,6 +48,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -70,7 +72,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -79,8 +80,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
@@ -778,7 +779,8 @@ private data class AnalyticsPayoutState(
     val day: String,
     val month: String,
     val amount: String,
-    val emphasized: Boolean = false
+    /** День выплаты уже наступил и выплачен — карточка с пониженной непрозрачностью. */
+    val isPaidOut: Boolean = false
 )
 
 private data class AnalyticsOperationState(
@@ -836,12 +838,14 @@ private fun AnalyticsScreen(
 ) {
     BackHandler(onBack = onBack)
 
+    val payoutsScrollState = rememberScrollState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
-            .padding(start = 24.dp, top = 32.dp, end = 24.dp, bottom = 32.dp),
+            .padding(start = 16.dp, top = 32.dp, end = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(64.dp)
     ) {
         Box(
@@ -895,14 +899,13 @@ private fun AnalyticsScreen(
                 }
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(payoutsScrollState),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     state.payouts.forEach { payout ->
-                        AnalyticsPayoutItem(
-                            modifier = Modifier.weight(1f),
-                            payout = payout
-                        )
+                        AnalyticsPayoutItem(payout = payout)
                     }
                 }
             }
@@ -1025,48 +1028,104 @@ private fun AnalyticsBackButton(
     }
 }
 
+private fun analyticsPayoutAmountSegments(amount: String): List<Pair<Boolean, String>> {
+    val cleaned = amount.filter { it != ' ' && it != '\u00A0' }
+    if (cleaned.isEmpty()) return emptyList()
+    fun isMonoRegion(c: Char) = c.isDigit()
+    val segments = mutableListOf<Pair<Boolean, String>>()
+    var i = 0
+    while (i < cleaned.length) {
+        val mono = isMonoRegion(cleaned[i])
+        val start = i
+        i++
+        while (i < cleaned.length && isMonoRegion(cleaned[i]) == mono) i++
+        segments.add(mono to cleaned.substring(start, i))
+    }
+    return segments
+}
+
+@Composable
+private fun AnalyticsPayoutAmountText(amount: String, modifier: Modifier = Modifier) {
+    val segments = remember(amount) { analyticsPayoutAmountSegments(amount) }
+    val baseStyle = TextStyle(
+        color = AppPositive,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        fontFamily = FontFamily.SansSerif
+    )
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        segments.forEach { (useMono, text) ->
+            Text(
+                text = text,
+                style = if (useMono) {
+                    baseStyle.copy(fontFamily = FontFamily.Monospace)
+                } else {
+                    baseStyle
+                }
+            )
+        }
+    }
+}
+
 @Composable
 private fun AnalyticsPayoutItem(
     modifier: Modifier = Modifier,
     payout: AnalyticsPayoutState
 ) {
+    val paidOutAlpha = if (payout.isPaidOut) 0.4f else 1f
     Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = modifier
+            .alpha(paidOutAlpha)
+            .width(IntrinsicSize.Max),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(28.dp))
-                .background(if (payout.emphasized) AppPrimary else AppSurface)
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                .background(AppSurface)
+                .padding(horizontal = 16.dp)
+                .padding(top = 16.dp, bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(0.dp)
+            verticalArrangement = Arrangement.Center
         ) {
             Text(
                 text = payout.day,
-                color = if (payout.emphasized) AppPrimaryText else AppPrimary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                color = AppPrimary,
                 fontSize = 34.sp,
                 fontWeight = FontWeight.SemiBold,
                 lineHeight = 46.sp
             )
             Text(
                 text = payout.month,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (payout.emphasized) AppPrimaryText else AppPrimary
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                color = AppPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 24.sp
             )
         }
-        Box(
+        Column(
             modifier = Modifier
-                .clip(RoundedCornerShape(28.dp))
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
                 .background(AppPositive.copy(alpha = 0.2f))
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center
+                .padding(horizontal = 16.dp)
+                .padding(top = 8.dp, bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = payout.amount,
-                style = MaterialTheme.typography.labelLarge,
-                color = AppPositive
+            AnalyticsPayoutAmountText(
+                amount = payout.amount,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
@@ -1316,21 +1375,24 @@ private fun BalanceAmountText(amount: String) {
     val primaryPart = if (delimiterIndex >= 0) amount.substring(0, delimiterIndex) else amount
     val decimalPart = if (delimiterIndex >= 0) amount.substring(delimiterIndex) else ""
 
-    Text(
-        text = buildAnnotatedString {
-            withStyle(SpanStyle(color = AppPrimary)) {
-                append(primaryPart)
-            }
-            if (decimalPart.isNotEmpty()) {
-                withStyle(SpanStyle(color = AppMutedText)) {
-                    append(decimalPart)
-                }
-            }
-        },
-        fontSize = 44.sp,
-        fontWeight = FontWeight.SemiBold,
-        lineHeight = 54.sp
-    )
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(
+            text = primaryPart,
+            color = AppPrimary,
+            fontSize = 44.sp,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 54.sp
+        )
+        if (decimalPart.isNotEmpty()) {
+            Text(
+                text = decimalPart,
+                color = AppMutedText,
+                fontSize = 44.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 54.sp
+            )
+        }
+    }
 }
 
 @Composable
@@ -1775,9 +1837,12 @@ private fun buildAnalyticsPlaceholderState(): AnalyticsState {
         totalIncome = "5 000",
         paidOutLabel = "1 500 выплачено",
         payouts = listOf(
-            AnalyticsPayoutState(day = "12", month = "апр", amount = "1500₽", emphasized = true),
-            AnalyticsPayoutState(day = "24", month = "апр", amount = "1500₽"),
-            AnalyticsPayoutState(day = "27", month = "апр", amount = "2000₽")
+            AnalyticsPayoutState(day = "5", month = "май", amount = "500₽", isPaidOut = true),
+            AnalyticsPayoutState(day = "10", month = "май", amount = "1500₽", isPaidOut = true),
+            AnalyticsPayoutState(day = "15", month = "май", amount = "25000₽", isPaidOut = true),
+            AnalyticsPayoutState(day = "20", month = "май", amount = "200₽", isPaidOut = false),
+            AnalyticsPayoutState(day = "24", month = "май", amount = "1500₽", isPaidOut = false),
+            AnalyticsPayoutState(day = "31", month = "май", amount = "9999₽", isPaidOut = false)
         ),
         availableToWithdraw = "7 000",
         allTimeYield = "16%",
