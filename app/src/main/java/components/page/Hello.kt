@@ -2,6 +2,7 @@ package components.page
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import androidx.biometric.BiometricPrompt
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -54,6 +55,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -87,6 +90,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.chillinvest.R
@@ -110,6 +115,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.ResolverStyle
 
 private const val SecurePrefsName = "chill_invest_secure"
+/** Used when [EncryptedSharedPreferences] / Keystore fails (see KeyMint VERIFICATION_FAILED in logcat). */
+private const val PlainPrefsName = "chill_invest_app_prefs"
 private const val KeyServer = "server"
 private const val KeyLogin = "login"
 private const val KeyPassword = "password"
@@ -155,18 +162,22 @@ private data class StoredHelloState(
     val onboardingCompleted: Boolean = false
 )
 
+private fun initialHelloScreen(context: Context): HelloScreen {
+    val stored = loadStoredHelloState(context)
+    return when {
+        !stored.onboardingCompleted -> HelloScreen.Welcome
+        stored.localPin.isNotBlank() -> HelloScreen.Unlock
+        else -> HelloScreen.Home
+    }
+}
+
 @Composable
 fun HelloFlow(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val storedState = remember(context) { loadStoredHelloState(context) }
+    val appContext = context.applicationContext
+    val storedState = remember(appContext) { loadStoredHelloState(appContext) }
     var screen by rememberSaveable {
-        mutableStateOf(
-            when {
-                !storedState.onboardingCompleted -> HelloScreen.Welcome
-                storedState.localPin.isNotBlank() -> HelloScreen.Unlock
-                else -> HelloScreen.Home
-            }
-        )
+        mutableStateOf(initialHelloScreen(appContext))
     }
     var server by rememberSaveable { mutableStateOf(storedState.server) }
     var login by rememberSaveable { mutableStateOf(storedState.login) }
@@ -187,6 +198,34 @@ fun HelloFlow(modifier: Modifier = Modifier) {
     var showBiometryPopup by rememberSaveable { mutableStateOf(false) }
     var isBiometryLoading by rememberSaveable { mutableStateOf(false) }
     var isUnlockBiometryLoading by rememberSaveable { mutableStateOf(false) }
+
+    var pendingLockOnForeground by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, appContext) {
+        val activity = context as? FragmentActivity
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (activity?.isChangingConfigurations == true) return@LifecycleEventObserver
+                val prefs = loadStoredHelloState(appContext)
+                if (prefs.onboardingCompleted && prefs.localPin.isNotBlank()) {
+                    pendingLockOnForeground = true
+                }
+            }
+            if (event == Lifecycle.Event.ON_START && pendingLockOnForeground) {
+                pendingLockOnForeground = false
+                val prefs = loadStoredHelloState(appContext)
+                if (prefs.onboardingCompleted && prefs.localPin.isNotBlank()) {
+                    localPin = prefs.localPin
+                    biometryEnabled = prefs.biometryEnabled
+                    unlockPin = ""
+                    unlockErrorMessage = null
+                    screen = HelloScreen.Unlock
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(
         modifier = modifier
@@ -2460,12 +2499,18 @@ private fun BiometryPopup(
     )
 }
 
-private fun securePreferences(context: Context): SharedPreferences? {
-    return runCatching {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
+private fun buildMasterKey(context: Context, requestStrongBox: Boolean): MasterKey {
+    val builder = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        builder.setRequestStrongBoxBacked(requestStrongBox)
+    }
+    return builder.build()
+}
 
+private fun tryCreateEncryptedPreferences(context: Context, requestStrongBox: Boolean): SharedPreferences? {
+    return runCatching {
+        val masterKey = buildMasterKey(context, requestStrongBox)
         EncryptedSharedPreferences.create(
             context,
             SecurePrefsName,
@@ -2476,8 +2521,20 @@ private fun securePreferences(context: Context): SharedPreferences? {
     }.getOrNull()
 }
 
+/**
+ * Prefers [EncryptedSharedPreferences]; if Keystore / KeyMint fails (common on some Android 16 builds
+ * or after backup/restore mismatches), falls back to app-private non-encrypted prefs so the app
+ * still persists settings.
+ */
+private fun securePreferences(context: Context): SharedPreferences {
+    val appContext = context.applicationContext
+    tryCreateEncryptedPreferences(appContext, requestStrongBox = false)?.let { return it }
+    tryCreateEncryptedPreferences(appContext, requestStrongBox = true)?.let { return it }
+    return appContext.getSharedPreferences(PlainPrefsName, Context.MODE_PRIVATE)
+}
+
 private fun loadStoredHelloState(context: Context): StoredHelloState {
-    val preferences = securePreferences(context) ?: return StoredHelloState()
+    val preferences = securePreferences(context)
     val storedMode = preferences.getString(KeyStrategyMode, StrategyMode.Adaptive.name)
     val strategyMode = StrategyMode.values().firstOrNull { it.name == storedMode } ?: StrategyMode.Adaptive
 
@@ -2503,23 +2560,23 @@ private fun saveWelcomeSettings(
     login: String,
     password: String
 ) {
-    securePreferences(context)?.edit()
-        ?.putString(KeyServer, server)
-        ?.putString(KeyLogin, login)
-        ?.putString(KeyPassword, password)
-        ?.apply()
+    securePreferences(context).edit()
+        .putString(KeyServer, server)
+        .putString(KeyLogin, login)
+        .putString(KeyPassword, password)
+        .apply()
 }
 
 private fun saveLocalPin(context: Context, pin: String) {
-    securePreferences(context)?.edit()
-        ?.putString(KeyLocalPin, pin)
-        ?.apply()
+    securePreferences(context).edit()
+        .putString(KeyLocalPin, pin)
+        .commit()
 }
 
 private fun saveBiometryEnabled(context: Context, enabled: Boolean) {
-    securePreferences(context)?.edit()
-        ?.putBoolean(KeyBiometryEnabled, enabled)
-        ?.apply()
+    securePreferences(context).edit()
+        .putBoolean(KeyBiometryEnabled, enabled)
+        .apply()
 }
 
 private fun saveFinalSetupSettings(
@@ -2531,20 +2588,20 @@ private fun saveFinalSetupSettings(
     strategyMode: StrategyMode,
     profitPercent: String
 ) {
-    securePreferences(context)?.edit()
-        ?.putString(KeyDeadlineDate, deadlineDate)
-        ?.putBoolean(KeyDeadlineInfinite, deadlineInfinite)
-        ?.putString(KeyGoalAmount, goalAmount)
-        ?.putBoolean(KeyGoalSyncEnabled, goalSyncEnabled)
-        ?.putString(KeyStrategyMode, strategyMode.name)
-        ?.putString(KeyProfitPercent, profitPercent)
-        ?.apply()
+    securePreferences(context).edit()
+        .putString(KeyDeadlineDate, deadlineDate)
+        .putBoolean(KeyDeadlineInfinite, deadlineInfinite)
+        .putString(KeyGoalAmount, goalAmount)
+        .putBoolean(KeyGoalSyncEnabled, goalSyncEnabled)
+        .putString(KeyStrategyMode, strategyMode.name)
+        .putString(KeyProfitPercent, profitPercent)
+        .apply()
 }
 
 private fun saveOnboardingCompleted(context: Context, completed: Boolean) {
-    securePreferences(context)?.edit()
-        ?.putBoolean(KeyOnboardingCompleted, completed)
-        ?.apply()
+    securePreferences(context).edit()
+        .putBoolean(KeyOnboardingCompleted, completed)
+        .commit()
 }
 
 private fun showBiometricPrompt(
