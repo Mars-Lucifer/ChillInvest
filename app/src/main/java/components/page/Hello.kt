@@ -18,6 +18,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -66,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
@@ -80,6 +82,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
@@ -127,7 +130,8 @@ private enum class HelloScreen {
     ConfirmPin,
     FinalSetup,
     Unlock,
-    Home
+    Home,
+    Analytics
 }
 
 private enum class StrategyMode(val title: String) {
@@ -373,7 +377,12 @@ fun HelloFlow(modifier: Modifier = Modifier) {
                     onStopStrategyConfirm = {
                         // TODO: replace with DELETE strategy request.
                     },
-                    onAnalyticsClick = {}
+                    onAnalyticsClick = { screen = HelloScreen.Analytics }
+                )
+
+                HelloScreen.Analytics -> AnalyticsScreen(
+                    state = buildAnalyticsPlaceholderState(),
+                    onBack = { screen = HelloScreen.Home }
                 )
             }
         }
@@ -755,6 +764,31 @@ private data class PortfolioSliceState(
     val color: Color
 )
 
+private data class AnalyticsState(
+    val totalIncome: String,
+    val paidOutLabel: String,
+    val payouts: List<AnalyticsPayoutState>,
+    val availableToWithdraw: String,
+    val allTimeYield: String,
+    val monthYield: String,
+    val operations: List<AnalyticsOperationState>
+)
+
+private data class AnalyticsPayoutState(
+    val day: String,
+    val month: String,
+    val amount: String,
+    val emphasized: Boolean = false
+)
+
+private data class AnalyticsOperationState(
+    val title: String,
+    val date: String,
+    val amount: String,
+    val positive: Boolean,
+    val badge: String
+)
+
 private enum class PopupButtonStyle {
     Primary,
     Secondary,
@@ -791,6 +825,317 @@ private fun AppCompactLogo() {
             text = "Chill.Invest",
             style = MaterialTheme.typography.titleLarge,
             color = AppPrimary
+        )
+    }
+}
+
+@Composable
+private fun AnalyticsScreen(
+    state: AnalyticsState,
+    onBack: () -> Unit
+) {
+    BackHandler(onBack = onBack)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .verticalScroll(rememberScrollState())
+            .padding(start = 24.dp, top = 32.dp, end = 24.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(64.dp)
+    ) {
+        Box(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            AnalyticsBackButton(
+                modifier = Modifier.align(Alignment.CenterStart),
+                onClick = onBack
+            )
+            Text(
+                text = "Аналитика",
+                style = MaterialTheme.typography.titleLarge,
+                color = AppPrimary,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(40.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "₽",
+                        color = AppPrimary,
+                        fontSize = 44.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 54.sp
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = state.totalIncome,
+                            color = AppPrimary,
+                            fontSize = 44.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 54.sp
+                        )
+                        Text(
+                            text = state.paidOutLabel,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppMutedText
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    state.payouts.forEach { payout ->
+                        AnalyticsPayoutItem(
+                            modifier = Modifier.weight(1f),
+                            payout = payout
+                        )
+                    }
+                }
+            }
+
+            HomeCard {
+                Text(
+                    text = "Доходность",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppPrimary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(AppSurface)
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "₽",
+                            color = AppPositive,
+                            fontSize = 34.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 46.sp
+                        )
+                        Text(
+                            text = state.availableToWithdraw,
+                            color = AppPositive,
+                            fontSize = 34.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 46.sp
+                        )
+                    }
+                    Text(
+                        text = "Доступно к выводу",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = AppPrimary
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                AnalyticsYieldRow(
+                    value = state.allTimeYield,
+                    label = "Все время"
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                AnalyticsYieldRow(
+                    value = state.monthYield,
+                    label = "Этот месяц"
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Text(
+                    text = "История операций",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = AppPrimary
+                )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    state.operations.forEach { operation ->
+                        AnalyticsOperationRow(operation = operation)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsBackButton(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1f,
+        animationSpec = spring(stiffness = 800f),
+        label = "analytics_back_button_scale"
+    )
+
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .scale(scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.size(22.dp)) {
+            val stroke = 2.dp.toPx()
+            drawLine(
+                color = AppPrimary,
+                start = Offset(size.width * 0.68f, size.height * 0.2f),
+                end = Offset(size.width * 0.34f, size.height * 0.5f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = AppPrimary,
+                start = Offset(size.width * 0.34f, size.height * 0.5f),
+                end = Offset(size.width * 0.68f, size.height * 0.8f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsPayoutItem(
+    modifier: Modifier = Modifier,
+    payout: AnalyticsPayoutState
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .background(if (payout.emphasized) AppPrimary else AppSurface)
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(0.dp)
+        ) {
+            Text(
+                text = payout.day,
+                color = if (payout.emphasized) AppPrimaryText else AppPrimary,
+                fontSize = 34.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 46.sp
+            )
+            Text(
+                text = payout.month,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (payout.emphasized) AppPrimaryText else AppPrimary
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(28.dp))
+                .background(AppPositive.copy(alpha = 0.2f))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = payout.amount,
+                style = MaterialTheme.typography.labelLarge,
+                color = AppPositive
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsYieldRow(
+    value: String,
+    label: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = value,
+            color = AppPrimary,
+            fontSize = 34.sp,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 46.sp
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = AppMutedText
+        )
+    }
+}
+
+@Composable
+private fun AnalyticsOperationRow(operation: AnalyticsOperationState) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(AppSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = operation.badge,
+                style = MaterialTheme.typography.labelLarge,
+                color = AppPrimary
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = operation.title,
+                style = MaterialTheme.typography.labelLarge,
+                color = AppPrimary
+            )
+            Text(
+                text = operation.date,
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppMutedText
+            )
+        }
+        Text(
+            text = operation.amount,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (operation.positive) AppPositive else AppMutedText
         )
     }
 }
@@ -1421,6 +1766,58 @@ private fun buildHomePlaceholderState(
             PortfolioSliceState(label = "ОФЗ", fraction = 0.64f, color = AppPrimary),
             PortfolioSliceState(label = "Корп.", fraction = 0.5f, color = AppAccentOrange),
             PortfolioSliceState(label = "Золото", fraction = 0.76f, color = AppAccentYellow)
+        )
+    )
+}
+
+private fun buildAnalyticsPlaceholderState(): AnalyticsState {
+    return AnalyticsState(
+        totalIncome = "5 000",
+        paidOutLabel = "1 500 выплачено",
+        payouts = listOf(
+            AnalyticsPayoutState(day = "12", month = "апр", amount = "1500₽", emphasized = true),
+            AnalyticsPayoutState(day = "24", month = "апр", amount = "1500₽"),
+            AnalyticsPayoutState(day = "27", month = "апр", amount = "2000₽")
+        ),
+        availableToWithdraw = "7 000",
+        allTimeYield = "16%",
+        monthYield = "12%",
+        operations = listOf(
+            AnalyticsOperationState(
+                title = "Покупка Яндекс",
+                date = "22.04.2026",
+                amount = "-20 000₽",
+                positive = false,
+                badge = "YA"
+            ),
+            AnalyticsOperationState(
+                title = "Продажа Газпром",
+                date = "23.04.2026",
+                amount = "+15 500₽",
+                positive = true,
+                badge = "GA"
+            ),
+            AnalyticsOperationState(
+                title = "Покупка Сбербанк",
+                date = "24.04.2026",
+                amount = "-10 000₽",
+                positive = false,
+                badge = "SB"
+            ),
+            AnalyticsOperationState(
+                title = "Дивиденды Лукойл",
+                date = "25.04.2026",
+                amount = "+2 400₽",
+                positive = true,
+                badge = "LK"
+            ),
+            AnalyticsOperationState(
+                title = "Продажа МТС",
+                date = "26.04.2026",
+                amount = "+8 750₽",
+                positive = true,
+                badge = "MT"
+            )
         )
     )
 }
