@@ -9,7 +9,8 @@ internal enum class HelloScreen {
     FinalSetup,
     Unlock,
     Home,
-    Analytics
+    Analytics,
+    Stopped
 }
 
 internal enum class StrategyMode(val title: String) {
@@ -97,5 +98,6 @@ internal data class PopupButtonConfig(
 internal enum class HomePopup {
     Goal,
     Portfolio,
-    StopStrategy
+    StopStrategy,
+    Logout
 }

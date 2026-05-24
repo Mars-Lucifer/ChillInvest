@@ -1,8 +1,16 @@
 package components.page
 
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +32,8 @@ internal fun FinalSetupScreen(
     goalSyncEnabled: Boolean,
     strategyMode: StrategyMode,
     profitPercent: String,
+    isLoading: Boolean,
+    errorMessage: String?,
     onDeadlineDateChange: (String) -> Unit,
     onDeadlineInfiniteChange: (Boolean) -> Unit,
     onGoalAmountChange: (String) -> Unit,
@@ -144,10 +154,18 @@ internal fun FinalSetupScreen(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+        if (!errorMessage.isNullOrBlank()) {
+            Text(
+                text = errorMessage,
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppMutedText,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
         HelloButton(
             text = "Подключить",
-            enabled = deadlineIsValid,
-            loading = false,
+            enabled = deadlineIsValid && !isLoading,
+            loading = isLoading,
             onClick = onConnect
         )
     }

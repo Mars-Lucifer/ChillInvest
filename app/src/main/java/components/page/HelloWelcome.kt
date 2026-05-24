@@ -1,35 +1,36 @@
 package components.page
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.chillinvest.ui.theme.AppMutedText
 import com.example.chillinvest.ui.theme.AppPrimary
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @Composable
 internal fun WelcomeScreen(
     server: String,
     login: String,
     password: String,
+    isLoading: Boolean,
+    errorMessage: String?,
     onServerChange: (String) -> Unit,
     onLoginChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onContinue: (String, String, String) -> Unit
 ) {
-    var isLoading by rememberSaveable { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val canContinue = server.isNotBlank() && login.isNotBlank() && password.isNotBlank() && !isLoading
 
     Column(
@@ -47,7 +48,7 @@ internal fun WelcomeScreen(
                 color = AppPrimary
             )
             Text(
-                text = "Введите данные подключения для того чтобы продолжить",
+                text = "Введите данные подключения для того, чтобы продолжить",
                 style = MaterialTheme.typography.bodyLarge,
                 color = AppMutedText
             )
@@ -77,6 +78,14 @@ internal fun WelcomeScreen(
                 isPassword = true
             )
         }
+        if (!errorMessage.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = errorMessage,
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppMutedText
+            )
+        }
         Spacer(modifier = Modifier.weight(1f))
         HelloButton(
             text = "Продолжить",
@@ -84,11 +93,7 @@ internal fun WelcomeScreen(
             loading = isLoading,
             onClick = {
                 if (!canContinue) return@HelloButton
-                scope.launch {
-                    isLoading = true
-                    delay(250)
-                    onContinue(server.trim(), login.trim(), password)
-                }
+                onContinue(server.trim(), login.trim(), password)
             }
         )
     }

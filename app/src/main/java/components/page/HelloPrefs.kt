@@ -126,3 +126,9 @@ internal fun saveOnboardingCompleted(context: Context, completed: Boolean) {
         .putBoolean(KeyOnboardingCompleted, completed)
         .commit()
 }
+
+internal fun clearStoredHelloState(context: Context) {
+    securePreferences(context).edit()
+        .clear()
+        .commit()
+}

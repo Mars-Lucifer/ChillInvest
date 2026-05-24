@@ -82,11 +82,11 @@ internal fun buildHomePlaceholderState(
     )
 }
 
-private fun parseCurrencyValue(value: String): Int {
+internal fun parseCurrencyValue(value: String): Int {
     return value.filter(Char::isDigit).toIntOrNull() ?: 0
 }
 
-private fun formatCurrencyAmount(value: Int): String {
+internal fun formatCurrencyAmount(value: Int): String {
     return value.toString()
         .reversed()
         .chunked(3)
@@ -94,7 +94,7 @@ private fun formatCurrencyAmount(value: Int): String {
         .reversed() + "₽"
 }
 
-private fun resolveGoalPeriodLabel(
+internal fun resolveGoalPeriodLabel(
     deadlineDate: String,
     deadlineInfinite: Boolean
 ): String {
@@ -116,7 +116,8 @@ private fun resolveGoalPeriodLabel(
 internal fun HomeScreen(
     state: HomeState,
     onStopStrategyConfirm: () -> Unit,
-    onAnalyticsClick: () -> Unit
+    onAnalyticsClick: () -> Unit,
+    onLogoutConfirm: () -> Unit
 ) {
     var activePopup by rememberSaveable { mutableStateOf<HomePopup?>(null) }
     val blurRadius by animateDpAsState(
@@ -134,7 +135,17 @@ internal fun HomeScreen(
                 .padding(start = 24.dp, top = 32.dp, end = 24.dp, bottom = 70.dp),
             verticalArrangement = Arrangement.spacedBy(64.dp)
         ) {
-            AppCompactLogo()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AppCompactLogo()
+                HomeHeaderButton(
+                    text = "Выйти",
+                    onClick = { activePopup = HomePopup.Logout }
+                )
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(40.dp)) {
                 Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -272,9 +283,12 @@ internal fun HomeScreen(
 
             HomePopup.StopStrategy -> StopStrategyPopup(
                 onDismiss = { activePopup = null },
-                onConfirm = {
-                    onStopStrategyConfirm()
-                }
+                onConfirm = { onStopStrategyConfirm() }
+            )
+
+            HomePopup.Logout -> LogoutPopup(
+                onDismiss = { activePopup = null },
+                onConfirm = { onLogoutConfirm() }
             )
 
             null -> Unit
@@ -475,6 +489,40 @@ private fun HomeInfoPopup(
 }
 
 @Composable
+private fun HomeHeaderButton(
+    text: String,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.98f else 1f,
+        animationSpec = spring(stiffness = 700f),
+        label = "home_header_button_scale"
+    )
+
+    Box(
+        modifier = Modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(18.dp))
+            .background(AppSurface)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = AppPrimary
+        )
+    }
+}
+
+@Composable
 private fun StopStrategyPopup(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
@@ -487,6 +535,29 @@ private fun StopStrategyPopup(
         buttons = listOf(
             PopupButtonConfig(
                 text = "Остановить",
+                style = PopupButtonStyle.Accent,
+                onClick = onConfirm
+            ),
+            PopupButtonConfig(
+                text = "Отмена",
+                style = PopupButtonStyle.Secondary
+            )
+        )
+    )
+}
+
+@Composable
+private fun LogoutPopup(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    BottomPopupSheet(
+        onDismissRequest = onDismiss,
+        title = "Выйти из аккаунта?",
+        body = "Приложение полностью очистит сохранённые данные: адрес сервера, логин, пароль, PIN-код и настройки стратегии на устройстве.",
+        buttons = listOf(
+            PopupButtonConfig(
+                text = "Очистить данные",
                 style = PopupButtonStyle.Accent,
                 onClick = onConfirm
             ),
